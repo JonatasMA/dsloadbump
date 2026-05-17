@@ -23,7 +23,7 @@ INCLUDES	:=	include
 GAME_ICON	:=	../icon.bmp
 GAME_TITLE	:=	DSLoad Utility
 
-GAME_SUBTITLE1	:=	Send Files to DS via WiFi
+GAME_SUBTITLE1	:=	RoMM WiFi ROM Downloader
 GAME_SUBTITLE2	:=	Meido-Tek Productions
 
 #---------------------------------------------------------------------------------

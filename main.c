@@ -10,8 +10,9 @@
 #include <netinet/in.h>
 #include <netdb.h>
 
+#include "romm.h"
 
-#define VERSION				"0.25"
+#define VERSION				ROMM_VERSION
 
 #define CRC32_REMAINDER		0xFFFFFFFF
 
@@ -45,6 +46,8 @@ int GetFreeDiskSpace(const char *path);
 
 unsigned int crc32(void* buff, int bytes, unsigned int crc);
 
+void run_server_mode(void);
+
 
 int main(void) {
 
@@ -59,7 +62,7 @@ int main(void) {
 
 	// Display program banner
 	printf("DS File Loader Utility v%s\n", VERSION);
-	printf("2016 Meido-Tek Productions\n\n");
+	printf("2016-2025 Meido-Tek Productions\n\n");
 
 	printf("Initializing File System...");
 
@@ -92,122 +95,162 @@ int main(void) {
 		{
 			struct in_addr ip, gateway, mask, dns1, dns2;
 			ip = Wifi_GetIPInfo(&gateway, &mask, &dns1, &dns2);
-			printf("Device IP   : %s\n", inet_ntoa(ip) );
+			printf("Device IP   : %s\n", inet_ntoa(ip));
 		}
 
-		// Create a socket as a server and bind it
-		struct sockaddr_in server,client;
-		int sock,csock;
-		int ret;
+		// Load RoMM config (best-effort; doesn't fail if absent)
+		RommConfig romm_cfg;
+		int has_romm = romm_load_config(&romm_cfg);
 
-		sock = socket(AF_INET, SOCK_STREAM, 0);
+		// Main menu
+		printf("\n");
+		printf("A:     Server Mode\n");
+		printf("B:     RoMM Download\n");
+		printf("START: Shutdown\n");
+		if (!has_romm)
+			printf("[No /romm.cfg found]\n");
 
-		server.sin_family		= AF_INET;
-		server.sin_port			= htons(DEFAULT_PORT);
-		server.sin_addr.s_addr	= INADDR_ANY;
+		while(1) {
 
-		ret = bind(sock, (struct sockaddr*) &server, sizeof(server));
+			scanKeys();
+			int keys = keysDown();
 
-		if (ret) {
-
-			printf("Error %d binding socket!\n", ret);
-			while(1) swiWaitForVBlank();
-
-		} else {
-
-			printf("Default Dir : %s\n\n", currentDir);
-
-			printf("Waiting for connection...\n");
-			printf("Free space: %.2fMB\n", (((float)GetFreeDiskSpace("/"))/1024)/1024);
-
-			// Begin listening for incoming connections
-			if ((ret = listen(sock, 5))) {
-
-				printf("Error %d listening!\n", ret);
-
-				while(1) swiWaitForVBlank();
-
-			} else {
-
-				// Main loop
-				while(1) {
-
-					// Check and accept an incoming connection
-					{
-						int clientlen = sizeof(client);
-						csock = accept(sock, (struct sockaddr *)&client, &clientlen);
-					}
-
-					// Is socket valid?
-					if (csock >= 0) {
-
-						int isClient = false;
-
-						// Test comms with client
-						{
-
-							char temp[6];
-							memset(temp, 0, 6);
-							printf("Connected with %s\n", inet_ntoa(client.sin_addr));
-
-							// Receive an ID from the client
-							if (recv(csock, temp, 5, 0) > 0) {
-
-								// Check if message is a SNC0 ID
-								if (strncmp("SYNC0", temp, 5) != 0) {
-
-									printf("ERRROR: Client not compatible.\n");
-
-								} else {
-
-									printf("Protocol accepted!\n");
-									isClient = true;
-									SendReturn(csock, 0);
-
-								}
-
-							} else {
-
-								printf("ERROR: Client ID receive fail.\n");
-
-							}
-
-						}
-
-						// If client is valid, begin comms
-						if (isClient) {
-
-							DoComms(csock);
-							printf("Client disconnected.\n");
-							chdir(currentDir);
-
-						}
-
-						// Close connection
-						shutdown(csock, 0);
-						closesocket(csock);
-
-						// Exit loop (to either turn off or return to loader) if shutdown flag is set
-						if (systemShutdown == true)
-							break;
-
-						// Display stats
-						printf("Waiting for connection...\n");
-						printf("Free space: %.2fMB\n", (((float)GetFreeDiskSpace("/"))/1024)/1024);
-
-					}
-
-					swiWaitForVBlank();
-
-				}
-
+			if (keys & KEY_A) {
+				run_server_mode();
+				break;
+			} else if ((keys & KEY_B) && has_romm) {
+				romm_run_mode(&romm_cfg);
+				break;
+			} else if ((keys & KEY_B) && !has_romm) {
+				printf("Create /romm.cfg first!\n");
+			} else if (keys & KEY_START) {
+				systemShutdown = true;
+				break;
 			}
+
+			swiWaitForVBlank();
 
 		}
 
 	}
 
 	return 0;
+
+}
+
+
+void run_server_mode(void) {
+
+	consoleClear();
+	printf("=== Server Mode ===\n\n");
+	printf("Default Dir : %s\n\n", currentDir);
+
+	// Create a socket as a server and bind it
+	struct sockaddr_in server,client;
+	int sock,csock;
+	int ret;
+
+	sock = socket(AF_INET, SOCK_STREAM, 0);
+
+	server.sin_family		= AF_INET;
+	server.sin_port			= htons(DEFAULT_PORT);
+	server.sin_addr.s_addr	= INADDR_ANY;
+
+	ret = bind(sock, (struct sockaddr*) &server, sizeof(server));
+
+	if (ret) {
+
+		printf("Error %d binding socket!\n", ret);
+		while(1) swiWaitForVBlank();
+
+	} else {
+
+		printf("Waiting for connection...\n");
+		printf("Free space: %.2fMB\n", (((float)GetFreeDiskSpace("/"))/1024)/1024);
+
+		// Begin listening for incoming connections
+		if ((ret = listen(sock, 5))) {
+
+			printf("Error %d listening!\n", ret);
+			while(1) swiWaitForVBlank();
+
+		} else {
+
+			// Server accept loop
+			while(1) {
+
+				// Check and accept an incoming connection
+				{
+					int clientlen = sizeof(client);
+					csock = accept(sock, (struct sockaddr *)&client, &clientlen);
+				}
+
+				// Is socket valid?
+				if (csock >= 0) {
+
+					int isClient = false;
+
+					// Test comms with client
+					{
+
+						char temp[6];
+						memset(temp, 0, 6);
+						printf("Connected with %s\n", inet_ntoa(client.sin_addr));
+
+						// Receive an ID from the client
+						if (recv(csock, temp, 5, 0) > 0) {
+
+							// Check if message is a SNC0 ID
+							if (strncmp("SYNC0", temp, 5) != 0) {
+
+								printf("ERRROR: Client not compatible.\n");
+
+							} else {
+
+								printf("Protocol accepted!\n");
+								isClient = true;
+								SendReturn(csock, 0);
+
+							}
+
+						} else {
+
+							printf("ERROR: Client ID receive fail.\n");
+
+						}
+
+					}
+
+					// If client is valid, begin comms
+					if (isClient) {
+
+						DoComms(csock);
+						printf("Client disconnected.\n");
+						chdir(currentDir);
+
+					}
+
+					// Close connection
+					shutdown(csock, 0);
+					closesocket(csock);
+
+					// Exit loop if shutdown flag is set
+					if (systemShutdown == true)
+						break;
+
+					// Display stats
+					printf("Waiting for connection...\n");
+					printf("Free space: %.2fMB\n", (((float)GetFreeDiskSpace("/"))/1024)/1024);
+
+				}
+
+				swiWaitForVBlank();
+
+			}
+
+		}
+
+	}
 
 }
 
