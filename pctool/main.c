@@ -1,6 +1,21 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
-#include <winsock2.h>
+
+#ifdef _WIN32
+#  include <winsock2.h>
+#  define SOCK_CLOSE closesocket
+#else
+#  include <sys/socket.h>
+#  include <arpa/inet.h>
+#  include <netinet/in.h>
+#  include <sys/types.h>
+#  include <stdbool.h>
+   typedef int SOCKET;
+#  define INVALID_SOCKET (-1)
+#  define SOCK_CLOSE     close
+#endif
 
 
 #define VERSION				"0.25"
@@ -116,6 +131,7 @@ int main(int argc, const char* argv[]) {
     }
 
 
+#ifdef _WIN32
 	// Initialize Winsock
 	WSADATA	wsa;
 
@@ -125,6 +141,7 @@ int main(int argc, const char* argv[]) {
 		return EXIT_FAILURE;
 
 	}
+#endif
 
 	printf("Connecting to %s... ", ipAddr);
 
@@ -159,11 +176,11 @@ int main(int argc, const char* argv[]) {
 
 				// Give DS time to receive command before closing socket
 				usleep(500000);
-				closesocket(s);
+			SOCK_CLOSE(s);
 
-				WSACleanup();
-
-				return(EXIT_FAILURE);
+#ifdef _WIN32
+			WSACleanup();
+#endif
 
 			}
 
@@ -191,7 +208,7 @@ int main(int argc, const char* argv[]) {
 
 			// Give DS time to receive command before closing socket
 			usleep(500000);
-			closesocket(s);
+			SOCK_CLOSE(s);
 
 		} else {
 
@@ -201,14 +218,16 @@ int main(int argc, const char* argv[]) {
 
 			// Give DS time to receive command before closing socket
 			usleep(500000);
-			closesocket(s);
+			SOCK_CLOSE(s);
 
 		}
 
 	}
 
+#ifdef _WIN32
 	// Close down Winsock
 	WSACleanup();
+#endif
 
 	return(0);
 
@@ -379,8 +398,8 @@ int syncSendFile(SOCKET sock, const char* fileName, int flags) {
 	printf("Ok.\n");
 
 
-	// Delay to ensure stable transfer
-	usleep(200000000);
+	// Delay to ensure stable transfer (~200 ms)
+	usleep(200000);
 
 
 	return(0);
