@@ -1,5 +1,11 @@
 # DSload v2 — RoMM Integration Fork
 
+> **Fork by [VXisto](https://github.com/VXisto/dsloadbump)** — original DSload
+> by [Lameguy64](https://github.com/Lameguy64) / Meido-Tek Productions (2016).
+> The original project has been inactive since ~2016; this fork extends it with
+> RoMM integration, DSi WiFi support, SD-card caching, ZIP extraction, and
+> TwilightMenu++ directory layout.
+
 DSload v2 is a Nintendo DS homebrew utility that lets you transfer ROMs and
 files to your DS over WiFi from two sources:
 
@@ -139,3 +145,43 @@ Output: `dsload.nds`
 - [ ] Multi-file / multi-disk ROM zip extraction
 - [ ] Wildcard file sends (Server Mode)
 - [ ] CRC-based skip for already-present files (Server Mode)
+
+### TBD — Self-updater (SELECT key)
+
+The updater infrastructure is designed but not yet operational.
+The SELECT key in the main menu will show a placeholder screen pointing
+to the GitHub releases page.
+
+**Planned design:** the DS fetches a plain-text version manifest from a
+local HTTP endpoint (no TLS — NDS hardware has no SSL stack):
+
+```json
+{"version":"2.01","path":"/dsload/dsloadbump.nds","notes":"..."}
+```
+
+The manifest and `.nds` binary are served from the same nginx instance
+that proxies RoMM.  A one-liner `location /dsload/` block is all that
+is needed on the server side.  Optional `romm.cfg` keys:
+
+```ini
+# All default to your RoMM server / port if omitted
+update_host=192.168.1.100
+update_port=8054
+update_check_path=/dsload/version.json
+update_install_path=/dsloadbump.nds
+```
+
+This will be wired up and tested in a future release.
+
+---
+
+## Credits
+
+| Contributor | Role |
+|---|---|
+| **[Lameguy64](https://github.com/Lameguy64)** (Meido-Tek Productions) | Original DSload v0.25 — server mode, TCP protocol, PC tool |
+| **[VXisto](https://github.com/VXisto)** | v2 fork — RoMM HTTP/JSON integration, DSi WiFi (slots 1–6), SD-card metadata cache, streaming JSON parser, chunked transfer decoding, ZIP extraction (zlib), TwilightMenu++ platform directories, progress bar, Linux pctool port, DSi-enhanced ROM header |
+| **[RoMM project](https://github.com/rommapp/romm)** | API spec and self-hosted ROM manager this fork integrates with |
+
+This project is licensed under the GNU General Public License v2 (GPL-2.0),
+inherited from the original DSload codebase.

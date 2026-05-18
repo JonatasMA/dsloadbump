@@ -31,9 +31,20 @@
  * -------------------------------------------------------------------------- */
 
 #define ROMM_MAX_PLATFORMS  16
-#define ROMM_MAX_ROMS       15   /* ROMs shown per page (fits on 32×24 console) */
-#define ROMM_PAGE_SIZE      15
-#define ROMM_HTTP_BUF_SIZE  65536  /* 64 KB – JSON API response buffer          */
+#define ROMM_MAX_ROMS       10   /* ROMs shown per page (fits on 32×24 console) */
+#define ROMM_PAGE_SIZE      10
+#define ROMM_HTTP_BUF_SIZE  131072 /* 128 KB – JSON API response buffer         */
+
+/* --------------------------------------------------------------------------
+ * Metadata cache (SD card binary file)
+ *
+ * Format: 4-byte magic | 1-byte version | 4-byte platform_id |
+ *         4-byte rom_count | N × sizeof(RommRom) entries
+ * -------------------------------------------------------------------------- */
+
+#define ROMM_CACHE_MAGIC    0x524F4D4Du  /* 'ROMM' */
+#define ROMM_CACHE_VERSION  1
+#define ROMM_CACHE_FETCH    10           /* ROMs per API call during cache build */
 
 /* --------------------------------------------------------------------------
  * Data structures
@@ -41,12 +52,17 @@
 
 /* Configuration – loaded from ROMM_CONFIG_FILE */
 typedef struct {
-	char server[64];       /* RoMM host: IP address or hostname */
-	int  port;             /* HTTP port (default 3000)          */
-	char api_key[128];     /* API key (preferred auth method)   */
-	char username[32];     /* Username for Basic auth fallback  */
-	char password[64];     /* Password for Basic auth fallback  */
-	char download_dir[64]; /* Destination directory on SD card  */
+	char server[64];              /* RoMM host: IP address or hostname        */
+	int  port;                    /* HTTP port (default 3000)                 */
+	char api_key[128];            /* API key (preferred auth method)          */
+	char username[32];            /* Username for Basic auth fallback         */
+	char password[64];            /* Password for Basic auth fallback         */
+	char download_dir[64];        /* Destination directory on SD card         */
+	/* ---- self-update (HTTP, no TLS – see README for server setup) ---- */
+	char update_host[64];         /* Host serving version.json (default=server) */
+	int  update_port;             /* Port (default=port)                      */
+	char update_check_path[128];  /* Path to version manifest JSON            */
+	char update_install_path[128];/* Where to write the new .nds on SD card   */
 } RommConfig;
 
 typedef struct {
@@ -102,3 +118,11 @@ int romm_download_rom(const RommConfig *cfg, int rom_id,
  * -------------------------------------------------------------------------- */
 
 void romm_run_mode(const RommConfig *cfg);
+
+/* Check for a newer release via a plain-HTTP version manifest and offer
+ * to download + install it.  The manifest is a small JSON file:
+ *   {"version":"2.01","path":"/dsload/dsloadbump.nds","notes":"..."}
+ * Served from update_host:update_port (default: same as RoMM server).
+ * See README for a one-line nginx location block that proxies GitHub.
+ * Returns 1 if the app was updated (reboot required), 0 otherwise. */
+int romm_check_update(const RommConfig *cfg);

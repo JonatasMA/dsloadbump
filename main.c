@@ -1,5 +1,6 @@
 #include <nds.h>
 #include <dswifi9.h>
+#include <wfc.h>
 #include <fat.h>
 #include <stdio.h>
 #include <string.h>
@@ -48,6 +49,69 @@ unsigned int crc32(void* buff, int bytes, unsigned int crc);
 
 void run_server_mode(void);
 
+/* ---------------------------------------------------------------------------
+ * Connect to WiFi trying every saved profile (DS slots 1-3, DSi slots 4-6).
+ * Returns true if connected, false on failure/timeout.
+ * --------------------------------------------------------------------------- */
+static bool wifi_connect_all_slots(void) {
+	/* Init hardware + WFC subsystem only (no auto-connect yet) */
+	if (!Wifi_InitDefault(INIT_ONLY)) {
+		printf("Hardware init failed.\n");
+		return false;
+	}
+
+	/* Load ALL saved profiles from NVRAM:
+	 *  DS firmware  → slots 1-3
+	 *  DSi NVRAM    → slots 4-6 (wfcLoadFromNvram checks g_isTwlMode) */
+	wfcLoadFromNvram();
+	unsigned nslots = wfcGetNumSlots();
+	printf("%u profile%s found.\n", nslots, nslots == 1 ? "" : "s");
+
+	if (nslots == 0) {
+		printf("No WiFi profiles configured.\n");
+		return false;
+	}
+
+	/* Start trying all valid profiles in order */
+	if (!wfcBeginAutoConnect()) {
+		printf("Auto-connect start failed.\n");
+		return false;
+	}
+
+	/* Poll until connected or all profiles exhausted.
+	 * Give a 2-second grace period before treating Disconnected as failure
+	 * (status can briefly read 0 right after wfcBeginAutoConnect). */
+	int grace   = 120; /* 2 s @ 60 fps */
+	int timeout = 60 * 30; /* 30 s max */
+	WfcStatus prev = (WfcStatus)-1;
+
+	while (timeout-- > 0) {
+		swiWaitForVBlank();
+		WfcStatus s = (WfcStatus)wfcGetStatus();
+
+		if (s != prev) {
+			switch (s) {
+				case WfcStatus_Scanning:
+					printf("\rScanning...      "); break;
+				case WfcStatus_Connecting:
+					printf("\rConnecting...    "); break;
+				case WfcStatus_AcquiringIP:
+					printf("\rAcquiring IP...  "); break;
+				case WfcStatus_Connected:
+					printf("\rConnected!       \n"); return true;
+				default: break;
+			}
+			prev = s;
+		}
+
+		if (s == WfcStatus_Connected)   return true;
+		if (s == WfcStatus_Disconnected && grace <= 0) break;
+		if (grace > 0) grace--;
+	}
+
+	return (WfcStatus)wfcGetStatus() == WfcStatus_Connected;
+}
+
 
 int main(void) {
 
@@ -62,7 +126,8 @@ int main(void) {
 
 	// Display program banner
 	printf("DS File Loader Utility v%s\n", VERSION);
-	printf("2016-2025 Meido-Tek Productions\n\n");
+	printf("2016-2025 Meido-Tek Productions\n");
+	printf("v2 RoMM fork by VXisto\n\n");
 
 	printf("Initializing File System...");
 
@@ -79,12 +144,12 @@ int main(void) {
 	getcwd(currentDir, MAXPATHLEN);
 
 
-	// Initialize wifi
-	printf("Initializing WiFi...");
+	printf("Initializing WiFi...\n");
 
-	if(!Wifi_InitDefault(WFC_CONNECT)) {
+	if (!wifi_connect_all_slots()) {
 
-		printf("Connect Fail.\n");
+		printf("\nCould not connect to any WiFi profile.\n");
+		printf("Check DSi/DS WiFi settings (slots 1-6).\n");
 		while(1) swiWaitForVBlank();
 
 	} else {
@@ -106,11 +171,12 @@ int main(void) {
 		printf("\n");
 		printf("A:     Server Mode\n");
 		printf("B:     RoMM Download\n");
+		printf("SEL:   Check for Updates\n");
 		printf("START: Shutdown\n");
 		if (!has_romm)
 			printf("[No /romm.cfg found]\n");
 
-		while(1) {
+		while(pmMainLoop()) {
 
 			scanKeys();
 			int keys = keysDown();
@@ -123,6 +189,36 @@ int main(void) {
 				break;
 			} else if ((keys & KEY_B) && !has_romm) {
 				printf("Create /romm.cfg first!\n");
+			} else if (keys & KEY_SELECT) {
+				/* Auto-updater is not yet operational.
+				 * The infrastructure (version manifest + HTTP delivery
+				 * from a local server) is designed but needs proper
+				 * testing before shipping.  TBD. */
+				consoleClear();
+				printf("=== Check for Updates ===\n\n");
+				printf("Auto-updater is not yet\n");
+				printf("available in this build.\n\n");
+				printf("Check for releases at:\n");
+				printf("github.com/VXisto/\n");
+				printf("dsloadbump\n\n");
+				printf("(press any key)\n");
+				/* Wait for any button press */
+				while (1) {
+					swiWaitForVBlank();
+					scanKeys();
+					if (keysDown()) break;
+				}
+				consoleClear();
+		printf("DS File Loader Utility v%s\n", VERSION);
+		printf("2016-2025 Meido-Tek Productions\n");
+		printf("v2 RoMM fork by VXisto\n\n");
+				printf("Device IP   : %s\n", inet_ntoa(Wifi_GetIPInfo(NULL,NULL,NULL,NULL)));
+				printf("\n");
+				printf("A:     Server Mode\n");
+				printf("B:     RoMM Download\n");
+				printf("SEL:   Check for Updates\n");
+				printf("START: Shutdown\n");
+				if (!has_romm) printf("[No /romm.cfg found]\n");
 			} else if (keys & KEY_START) {
 				systemShutdown = true;
 				break;
@@ -181,7 +277,7 @@ void run_server_mode(void) {
 
 				// Check and accept an incoming connection
 				{
-					int clientlen = sizeof(client);
+					socklen_t clientlen = sizeof(client);
 					csock = accept(sock, (struct sockaddr *)&client, &clientlen);
 				}
 

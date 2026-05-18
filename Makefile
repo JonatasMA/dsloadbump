@@ -45,14 +45,14 @@ LDFLAGS	=	-specs=ds_arm9.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 #---------------------------------------------------------------------------------
 # any extra libraries we wish to link with the project (order is important)
 #---------------------------------------------------------------------------------
-LIBS	:= 	-lfat -ldswifi9 -lnds9
+LIBS	:= 	-lz -lfat -ldswifi9 -lnds9
 
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing
 # include and lib
 #---------------------------------------------------------------------------------
-LIBDIRS	:=	$(LIBNDS)
+LIBDIRS	:=	$(LIBNDS) $(DEVKITPRO)/portlibs/nds
 
 #---------------------------------------------------------------------------------
 # no real need to edit anything past this point unless you need to add additional
@@ -114,8 +114,18 @@ else
 
 #---------------------------------------------------------------------------------
 # main targets
+# DSi-enhanced flags:
+#   -g KDSB 00 ...  game code starting with 'K' sets unit code 0x02 (DSi-enhanced)
+#   -z 80040000     SCFG_EXT mask: enables ARM7 DSi hardware (Atheros WiFi etc.)
+#   -u 00030004     DSi high title ID (TWL category)
+# These three flags together allow the app to run in DSi mode on DSi hardware,
+# which sets g_isTwlMode=true so wfcLoadFromNvram() reads all 6 WiFi slots.
 #---------------------------------------------------------------------------------
 $(OUTPUT).nds	: 	$(OUTPUT).elf
+	$(SILENTCMD)ndstool -c $@ -9 $< $(_ARM7_ELF) \
+		-b $(GAME_ICON) "$(GAME_TITLE);$(GAME_SUBTITLE1);$(GAME_SUBTITLE2)" \
+		$(_ADDFILES) -g KDSB 00 "DSLoadBump" -z 80040000 -u 00030004
+	$(SILENTMSG) built ... $(notdir $@)
 $(OUTPUT).elf	:	$(OFILES)
 
 #---------------------------------------------------------------------------------
