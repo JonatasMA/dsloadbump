@@ -30,10 +30,17 @@
 static FILE *log_fp = NULL;
 
 void romm_log_init(void) {
-	log_fp = fopen(ROMM_LOG_FILE, "a");
-	if (log_fp)
-		fprintf(log_fp, "\n=== DSLoad v%s  RoMM session start ===\n",
+	/* Use "w" (overwrite) so a fresh log is always created/truncated. */
+	log_fp = fopen(ROMM_LOG_FILE, "w");
+	if (log_fp) {
+		setvbuf(log_fp, NULL, _IONBF, 0); /* unbuffered – writes hit card immediately */
+		fprintf(log_fp, "=== DSLoad v%s  RoMM session start ===\n",
 		        ROMM_VERSION);
+		fflush(log_fp);
+	} else {
+		/* Visible warning so the user knows logging is broken */
+		printf("[WARN] Cannot open log file:\n%s\n", ROMM_LOG_FILE);
+	}
 }
 
 void romm_log_close(void) {
@@ -521,6 +528,7 @@ static int http_download_to_file(const RommConfig *cfg, const char *path,
 	int req_len = snprintf(req, sizeof(req),
 		"GET %s HTTP/1.0\r\n"
 		"Host: %s:%d\r\n"
+		"Connection: close\r\n"
 		"%s"
 		"\r\n",
 		full_path, cfg->server, cfg->port, auth_hdr);
@@ -813,13 +821,13 @@ static int str_ends_with_zip(const char *name) {
  */
 static void platform_subdir(const char *slug, char *buf, int max) {
 	struct { const char *slug; const char *dir; } map[] = {
-		{ "nds",       "nds"       },
-		{ "gba",       "gba"       },
-		{ "gb",        "gb"        },
-		{ "gbc",       "gb"        },   /* TwilightMenu shares one GB dir */
-		{ "snes",      "snes"      },
-		{ "genesis",   "md"        },
-		{ "megadrive", "md"        },
+		{ "nds",       "nds"          },
+		{ "gba",       "gba"          },
+		{ "gb",        "other/gb"     },
+		{ "gbc",       "other/gb"     },   /* TwilightMenu shares one GB dir */
+		{ "snes",      "other/snes"   },
+		{ "genesis",   "other/md"     },
+		{ "megadrive", "other/md"     },
 		{ NULL, NULL }
 	};
 	for (int i = 0; map[i].slug; i++) {
@@ -850,7 +858,8 @@ static void platform_subdir(const char *slug, char *buf, int max) {
 
 static int http_download_and_extract(const RommConfig *cfg,
                                       const char *api_path,
-                                      const char *dest_dir) {
+                                      const char *dest_dir,
+                                      const char *expected_fs_name) {
 	char full_path[512];
 	build_url_path(cfg, api_path, full_path, sizeof(full_path));
 
@@ -860,7 +869,10 @@ static int http_download_and_extract(const RommConfig *cfg,
 	romm_log("EXTRACT %s -> %s", full_path, dest_dir);
 
 	int sock = http_connect(cfg);
-	if (sock < 0) return -1;
+	if (sock < 0) {
+		printf("ERR: connect failed\n");
+		return -1;
+	}
 
 	char req[1024];
 	int req_len = snprintf(req, sizeof(req),
@@ -871,16 +883,23 @@ static int http_download_and_extract(const RommConfig *cfg,
 		"\r\n",
 		full_path, cfg->server, cfg->port, auth_hdr);
 	if (send(sock, req, req_len, 0) < 0) {
-		romm_log("send() failed"); closesocket(sock); return -1;
+		romm_log("send() failed");
+		printf("ERR: send failed\n");
+		closesocket(sock); return -1;
 	}
 
 	char hdr[2048];
 	if (http_read_headers(sock, hdr, sizeof(hdr)) < 0) {
-		romm_log("Incomplete headers"); closesocket(sock); return -1;
+		romm_log("Incomplete headers");
+		printf("ERR: no HTTP headers\n");
+		closesocket(sock); return -1;
 	}
 	int status = http_parse_status(hdr);
 	romm_log("HTTP %d", status);
-	if (status != 200) { closesocket(sock); return -1; }
+	if (status != 200) {
+		printf("ERR: HTTP %d\n%.40s\n", status, full_path);
+		closesocket(sock); return -1;
+	}
 
 	SR sr;
 	sr_init(&sr, sock, http_parse_is_chunked(hdr));
@@ -890,7 +909,9 @@ static int http_download_and_extract(const RommConfig *cfg,
 	for (int i = 0; i < 30; i++) {
 		int c = sr_next(&sr);
 		if (c < 0) {
-			romm_log("ZIP: truncated LFH"); closesocket(sock); return -1;
+			romm_log("ZIP: truncated LFH");
+			printf("ERR: ZIP truncated LFH\n");
+			closesocket(sock); return -1;
 		}
 		lfh[i] = (uint8_t)c;
 	}
@@ -899,10 +920,11 @@ static int http_download_and_extract(const RommConfig *cfg,
 	               ((uint32_t)lfh[2] << 16) | ((uint32_t)lfh[3] << 24);
 	if (sig != ZIP_SIG) {
 		romm_log("ZIP: bad signature %08X", sig);
+		printf("ERR: bad ZIP sig %08lX\n", (unsigned long)sig);
 		closesocket(sock); return -1;
 	}
 
-	uint16_t method        = (uint16_t)(lfh[6]  | (lfh[7]  << 8));
+	uint16_t method        = (uint16_t)(lfh[8]  | (lfh[9]  << 8));
 	uint32_t compressed_sz = (uint32_t)(lfh[18] | (lfh[19] << 8) |
 	                                   (lfh[20] << 16) | (lfh[21] << 24));
 	uint32_t uncompressed_sz = (uint32_t)(lfh[22] | (lfh[23] << 8) |
@@ -916,6 +938,7 @@ static int http_download_and_extract(const RommConfig *cfg,
 
 	if (method != ZIP_METHOD_STORED && method != ZIP_METHOD_DEFLATE) {
 		romm_log("ZIP: unsupported method %d", method);
+		printf("ERR: ZIP method %d\n(only STORE/DEFLATE ok)\n", method);
 		closesocket(sock); return -1;
 	}
 
@@ -941,6 +964,7 @@ static int http_download_and_extract(const RommConfig *cfg,
 	FILE *fp = fopen(out_path, "wb");
 	if (!fp) {
 		romm_log("Cannot create: %s", out_path);
+		printf("ERR: can't create file\n%.28s\n", out_path);
 		closesocket(sock); return -1;
 	}
 	romm_log("Extracting to: %s", out_path);
@@ -973,6 +997,7 @@ static int http_download_and_extract(const RommConfig *cfg,
 		memset(&strm, 0, sizeof(strm));
 		if (inflateInit2(&strm, -15) != Z_OK) {
 			romm_log("inflateInit2 failed");
+			printf("ERR: zlib init failed\n");
 			fclose(fp); closesocket(sock); return -1;
 		}
 
@@ -1029,6 +1054,23 @@ extract_done:
 	{ char drain[256]; while (recv(sock, drain, sizeof(drain), 0) > 0); }
 	closesocket(sock);
 	romm_log("Extracted: %d bytes -> %s", written, out_path);
+
+	/* Warn if the inner filename doesn't match what we requested —
+	 * this indicates a server-side data mismatch (wrong file in ZIP). */
+	if (expected_fs_name && expected_fs_name[0]) {
+		/* Compare extensions */
+		const char *exp_dot = strrchr(expected_fs_name, '.');
+		const char *got_dot = strrchr(inner_name, '.');
+		if (exp_dot && got_dot &&
+		    strcasecmp(exp_dot, got_dot) != 0) {
+			printf("[!] SERVER DATA MISMATCH\n");
+			printf("Expected ext: %s\n", exp_dot);
+			printf("Got     ext: %s\n", got_dot);
+			printf("Wrong file on RoMM server!\n");
+			romm_log("MISMATCH: expected ext %s got %s",
+			         exp_dot, got_dot);
+		}
+	}
 	return written;
 }
 
@@ -1540,6 +1582,24 @@ int romm_check_update(const RommConfig *cfg) {
 }
 
 
+/* ==========================================================================
+ * Quick server ROM count – one HTTP GET with limit=1
+ * Returns the server's current total for this platform, or -1 on error.
+ * ========================================================================== */
+static int romm_get_server_count(const RommConfig *cfg, int platform_id) {
+	char path[256];
+	snprintf(path, sizeof(path),
+	         "/api/roms?platform_ids=%d&limit=1&offset=0"
+	         "&with_char_index=false&with_filter_values=false",
+	         platform_id);
+	int body = http_get_json(cfg, path);
+	if (body < 0) return -1;
+	int total = 0;
+	if (!json_int(http_buf, body, "total", &total)) return -1;
+	return total;
+}
+
+
 void romm_run_mode(const RommConfig *cfg) {
 	romm_log_init();
 	romm_log("romm_run_mode: server=%s:%d", cfg->server, cfg->port);
@@ -1579,11 +1639,23 @@ void romm_run_mode(const RommConfig *cfg) {
 
 		int platform_id = platforms[psel].id;
 
-		/* --- Ensure local metadata cache is present ----------------------- */
-		int total = romm_cache_get_count(platform_id);
-		if (total < 0) {
+		/* --- Ensure local metadata cache is present and up-to-date ------- */
+		consoleClear();
+		printf("Checking server...\n");
+		int server_total = romm_get_server_count(cfg, platform_id);
+		int total        = romm_cache_get_count(platform_id);
+		romm_log("Cache check: cached=%d server=%d", total, server_total);
+
+		int needs_rebuild = (total < 0) ||
+		                    (server_total > 0 && server_total != total);
+
+		if (needs_rebuild) {
 			consoleClear();
-			printf("No local cache found.\n");
+			if (total < 0)
+				printf("No local cache found.\n");
+			else
+				printf("Cache outdated:\n local=%d server=%d\nRebuilding...\n\n",
+				       total, server_total);
 			printf("Fetching ROM list from server...\n\n");
 			total = romm_build_cache(cfg, platform_id);
 			if (total < 0) {
@@ -1736,12 +1808,6 @@ void romm_run_mode(const RommConfig *cfg) {
 			if (choice < 0) continue;
 
 			consoleClear();
-			if (choice == 1 && is_zip) {
-				printf("Extracting:\n%.28s\n\n", roms[sel].fs_name);
-			} else {
-				printf("Downloading:\n%.28s\n\n", roms[sel].fs_name);
-			}
-
 			/* Build the API path */
 			char enc_name[384];
 			url_encode(roms[sel].fs_name, enc_name, sizeof(enc_name));
@@ -1750,9 +1816,19 @@ void romm_run_mode(const RommConfig *cfg) {
 			         "/api/roms/%d/files/content/%s",
 			         roms[sel].id, enc_name);
 
+			if (choice == 1 && is_zip) {
+				printf("Extracting [ID:%d]:\n%.28s\n\n",
+				       roms[sel].id, roms[sel].fs_name);
+			} else {
+				printf("Downloading [ID:%d]:\n%.28s\n\n",
+				       roms[sel].id, roms[sel].fs_name);
+			}
+			romm_log("Request: %s", api_path);
+
 			int bytes;
 			if (choice == 1 && is_zip) {
-				bytes = http_download_and_extract(cfg, api_path, dest_dir);
+				bytes = http_download_and_extract(cfg, api_path, dest_dir,
+				                                  roms[sel].fs_name);
 			} else {
 				/* Save file (ZIP or native) directly */
 				mkdir(dest_dir, 0755);
