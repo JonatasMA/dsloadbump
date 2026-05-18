@@ -744,7 +744,7 @@ int romm_download_rom(const RommConfig *cfg, int rom_id,
 
 	char api_path[512];
 	snprintf(api_path, sizeof(api_path),
-	         "/api/roms/%d/files/content/%s", rom_id, enc_name);
+	         "/api/roms/%d/content/%s", rom_id, enc_name);
 
 	/* Build local destination path: dest_dir/fs_name */
 	char local_path[256];
@@ -1813,7 +1813,7 @@ void romm_run_mode(const RommConfig *cfg) {
 			url_encode(roms[sel].fs_name, enc_name, sizeof(enc_name));
 			char api_path[512];
 			snprintf(api_path, sizeof(api_path),
-			         "/api/roms/%d/files/content/%s",
+			         "/api/roms/%d/content/%s",
 			         roms[sel].id, enc_name);
 
 			if (choice == 1 && is_zip) {
