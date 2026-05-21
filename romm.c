@@ -21,6 +21,7 @@
 #include <netinet/in.h>
 #include <netdb.h>
 #include <arpa/inet.h>
+#include <math.h>
 
 
 /* ==========================================================================
@@ -770,14 +771,15 @@ static void draw_progress(int done, int total_bytes) {
 	memset(bar, ' ', PBAR_W);
 	bar[PBAR_W] = '\0';
 
-	char size[12];
+	char size[12]; 
 
 	if (total_bytes > 0) {
-		int pct  = (int)((long)done * 100 / total_bytes);
-		int fill = (int)((long)pct * PBAR_W / 100);
+		int pct  = ceil(((long)done*100) / total_bytes);
+		int fill = ceil(((long)pct * PBAR_W)/100);
 		for (int i = 0; i < fill; i++) bar[i] = '#';
 
-		if (total_bytes >= 1024 * 1024)
+		/* 0x100000 = 1024*1024*/
+		if (total_bytes >= 0x100000)
 			snprintf(size, sizeof(size), "%d/%dMB",
 			         done >> 20, total_bytes >> 20);
 		else
@@ -792,7 +794,7 @@ static void draw_progress(int done, int total_bytes) {
 		for (int i = 0; i < PBAR_W; i++)
 			bar[i] = (i >= p && i < p + 3) ? '>' : ' ';
 
-		if (done >= 1024 * 1024)
+		if (done >= 0x100000)
 			snprintf(size, sizeof(size), "%dMB   ", done >> 20);
 		else
 			snprintf(size, sizeof(size), "%dKB   ", done >> 10);
